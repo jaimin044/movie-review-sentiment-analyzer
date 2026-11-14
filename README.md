@@ -156,3 +156,16 @@ All subsequent modules (feature engineering, vectorization, model training, eval
    jupyter notebook notebooks/01_data_exploration.ipynb
    jupyter notebook notebooks/02_text_preprocessing.ipynb
    ```
+
+## Running the full pipeline
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest -q
+PYTHONPATH=. .venv/bin/python src/preprocessing.py
+PYTHONPATH=. .venv/bin/python src/vectorizer.py
+PYTHONPATH=. .venv/bin/python src/train.py
+PYTHONPATH=. .venv/bin/python src/evaluate.py
+```
+
+The raw dataset is read from `data/raw/IMDB Dataset.csv`. Generated data and
+model artifacts are written to `data/processed/` and `models/`.

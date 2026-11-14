@@ -19,20 +19,8 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from sklearn.model_selection import train_test_split
 
-# Ensure required NLTK resources are available
-for resource, path in [
-    ("punkt", "tokenizers/punkt"),
-    ("punkt_tab", "tokenizers/punkt_tab"),
-    ("stopwords", "corpora/stopwords"),
-    ("wordnet", "corpora/wordnet"),
-    ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger"),
-    ("averaged_perceptron_tagger_eng", "taggers/averaged_perceptron_tagger_eng"),
-    ("omw-1.4", "corpora/omw-1.4"),
-]:
-    try:
-        nltk.data.find(path)
-    except LookupError:
-        nltk.download(resource, quiet=True)
+# NLTK resources are optional; the module has deterministic fallbacks for
+# offline environments and does not download data during import.
 
 # Comprehensive dictionary of English contractions
 CONTRACTION_MAP: dict[str, str] = {
@@ -206,7 +194,15 @@ _CONTRACTION_RE = re.compile(
 _FALLBACK_NT_RE = re.compile(r"(\w+)n't\b", flags=re.IGNORECASE)
 
 _LEMMATIZER = WordNetLemmatizer()
-_BASE_STOPWORDS: set[str] = set(stopwords.words("english"))
+try:
+    _BASE_STOPWORDS: set[str] = set(stopwords.words("english"))
+except LookupError:
+    _BASE_STOPWORDS = {
+        "a", "an", "and", "are", "as", "at", "be", "been", "by", "for",
+        "from", "in", "is", "it", "of", "on", "or", "that", "the", "this",
+        "to", "was", "were", "with", "do", "does", "did", "i", "he", "she",
+        "they", "you",
+    }
 
 
 def expand_contractions(text: str) -> str:
@@ -344,7 +340,10 @@ def tokenize_text(
     if not isinstance(text, str) or not text.strip():
         return []
 
-    tokens = word_tokenize(text)
+    try:
+        tokens = word_tokenize(text)
+    except LookupError:
+        tokens = re.findall(r"\w+|[^\w\s]", text)
 
     if not preserve_punctuation:
         tokens = [t for t in tokens if t.isalnum()]
@@ -401,7 +400,13 @@ def lemmatize_tokens(
     if not use_pos:
         return [_LEMMATIZER.lemmatize(t) if t.isalnum() else t for t in tokens]
 
-    pos_tagged = nltk.pos_tag(tokens)
+    try:
+        pos_tagged = nltk.pos_tag(tokens)
+    except LookupError:
+        return [
+            token if not token.isalnum() else _fallback_lemma(token)
+            for token in tokens
+        ]
     lemmatized: list[str] = []
 
     for word, tag in pos_tagged:
@@ -418,6 +423,21 @@ def lemmatize_tokens(
         lemmatized.append(lemma)
 
     return lemmatized
+
+
+def _fallback_lemma(word: str) -> str:
+    """Apply minimal morphology when WordNet is unavailable."""
+
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 5 and word.endswith("ing"):
+        stem = word[:-3]
+        return stem[:-1] if len(stem) > 2 and stem[-1] == stem[-2] else stem
+    if len(word) > 4 and word.endswith("ed"):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
 
 
 def remove_stopwords(
@@ -699,6 +719,21 @@ def prepare_and_save_splits(
     return train_df, test_df
 
 
+def run_preprocessing(
+    input_path: str = "data/raw/IMDB Dataset.csv",
+    output_path: str = "data/processed/imdb_cleaned.csv",
+) -> pd.DataFrame:
+    """Create the normalized dataset consumed by the vectorizer."""
+
+    df = clean_dataset(load_dataset(input_path), subset=["review"])
+    df["review"] = df["review"].map(preprocess_text)
+    df = df[df["review"].ne("")].copy()
+    df["label"] = df["sentiment"].str.lower().eq("positive").astype(int)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    df.to_csv(output_path, index=False)
+    return df
+
+
 if __name__ == "__main__":
     # Self-test when run directly
     sample = "The movie was not good! In fact, it wasn't worth watching, but the music was nice."
@@ -707,4 +742,3 @@ if __name__ == "__main__":
     print("Tokens:", tokenize_text(clean_text(sample)))
     print("Preprocessed (str):", preprocess_text(sample))
     print("Preprocessed (tokens):", preprocess_text(sample, return_tokens=True))
-

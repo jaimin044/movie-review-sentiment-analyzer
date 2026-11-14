@@ -15,6 +15,7 @@ from src.preprocessing import (
     clean_dataset,
     split_data,
     prepare_and_save_splits,
+    run_preprocessing,
     NEGATION_WORDS,
     CONTRACTION_MAP,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "clean_dataset",
     "split_data",
     "prepare_and_save_splits",
+    "run_preprocessing",
     "NEGATION_WORDS",
     "CONTRACTION_MAP",
 ]
