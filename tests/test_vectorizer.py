@@ -11,8 +11,10 @@ from sklearn.pipeline import Pipeline
 
 from src.vectorizer import (
     DEFAULT_BASELINE_TFIDF_CONFIG,
+    ContextFeatureTransformer,
     TextPreprocessor,
     build_baseline_pipeline,
+    build_context_pipeline,
     create_baseline_vectorizer,
     create_preprocessor,
 )
@@ -171,3 +173,103 @@ class TestBaselinePipeline:
             assert pred[0] == "positive"
             proba = loaded_pipe.predict_proba(["Great movie, loved every minute!"])
             assert proba[0][1] > 0.5
+
+
+class TestContextFeatureTransformer:
+    """Tests for ContextFeatureTransformer scikit-learn transformer."""
+
+    def test_single_string_input(self):
+        cf = ContextFeatureTransformer()
+        text = "movie not good but entertaining"
+        result = cf.transform(text)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "NOT_good" in result[0]
+        assert "BEFORE_BUT_" in result[0]
+        assert "AFTER_BUT_" in result[0]
+
+    def test_list_and_series_input(self):
+        cf = ContextFeatureTransformer()
+        docs = ["movie not good", "plot was slow but ending was great"]
+        res_list = cf.transform(docs)
+        res_series = cf.transform(pd.Series(docs))
+        assert len(res_list) == 2
+        assert len(res_series) == 2
+        assert res_list == res_series
+
+    def test_empty_and_whitespace_input(self):
+        cf = ContextFeatureTransformer()
+        res = cf.transform(["", "   ", None])
+        assert res == ["", "", ""]
+
+    def test_fit_returns_self(self):
+        cf = ContextFeatureTransformer()
+        assert cf.fit(["test"]) is cf
+
+    def test_joblib_serialization(self):
+        cf = ContextFeatureTransformer()
+        with tempfile.NamedTemporaryFile(suffix=".joblib") as tmp:
+            joblib.dump(cf, tmp.name)
+            loaded = joblib.load(tmp.name)
+            assert isinstance(loaded, ContextFeatureTransformer)
+            out = loaded.transform(["not good but fun"])
+            assert "NOT_good" in out[0]
+
+
+class TestContextPipeline:
+    """Tests for end-to-end context-aware pipeline construction and serialization."""
+
+    def test_pipeline_construction_and_structure(self):
+        pipe = build_context_pipeline(MultinomialNB())
+        assert isinstance(pipe, Pipeline)
+        assert "preprocessor" in pipe.named_steps
+        assert "context_features" in pipe.named_steps
+        assert "tfidf" in pipe.named_steps
+        assert "classifier" in pipe.named_steps
+        assert isinstance(pipe.named_steps["context_features"], ContextFeatureTransformer)
+
+    def test_pipeline_fit_predict_raw_text(self):
+        X_train = [
+            "An amazing and fantastic movie! Truly wonderful experience.",
+            "Loved the brilliant acting, awesome and wonderful film.",
+            "Terrible, awful, and horribly boring disaster of a movie.",
+            "Hated every minute, complete and utter waste of time.",
+        ]
+        y_train = ["positive", "positive", "negative", "negative"]
+
+        pipe = build_context_pipeline(
+            LogisticRegression(random_state=42),
+            vectorizer_kwargs={"min_df": 1},
+        )
+        pipe.fit(X_train, y_train)
+
+        test_reviews = [
+            "Fantastic, brilliant, and wonderful film!",
+            "Terrible, awful, and horribly boring.",
+        ]
+        preds = pipe.predict(test_reviews)
+        assert preds[0] == "positive"
+        assert preds[1] == "negative"
+
+        probas = pipe.predict_proba(test_reviews)
+        assert probas.shape == (2, 2)
+
+    def test_context_pipeline_serialization_and_loading(self):
+        X_train = [
+            "Great movie, loved it!",
+            "Terrible film, hated it.",
+        ]
+        y_train = ["positive", "negative"]
+
+        pipe = build_context_pipeline(
+            MultinomialNB(),
+            vectorizer_kwargs={"min_df": 1},
+        )
+        pipe.fit(X_train, y_train)
+
+        with tempfile.NamedTemporaryFile(suffix=".joblib") as tmp:
+            joblib.dump(pipe, tmp.name)
+            loaded = joblib.load(tmp.name)
+            assert isinstance(loaded, Pipeline)
+            pred = loaded.predict(["Great movie, loved every minute!"])
+            assert pred[0] == "positive"
