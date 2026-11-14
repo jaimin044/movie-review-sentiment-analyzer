@@ -17,6 +17,8 @@ from src.preprocessing import (
     prepare_and_save_splits,
     NEGATION_WORDS,
     CONTRACTION_MAP,
+    CONTRAST_WORDS,
+    REQUIRED_COLUMNS,
 )
 
 __all__ = [
@@ -32,5 +34,6 @@ __all__ = [
     "prepare_and_save_splits",
     "NEGATION_WORDS",
     "CONTRACTION_MAP",
+    "CONTRAST_WORDS",
+    "REQUIRED_COLUMNS",
 ]
-

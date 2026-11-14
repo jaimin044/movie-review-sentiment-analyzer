@@ -5,24 +5,31 @@ Tests cover:
 - Contraction expansion and curly apostrophe handling
 - Punctuation and sentence boundary preservation
 - Negation preservation in stopword filtering
+- Contrastive conjunction preservation ('but', 'however')
 - POS-guided and fallback lemmatization
 - Tokenization edge cases
 - End-to-end preprocessing pipeline
+- Dataset schema validation (review and sentiment columns)
 - Stratified dataset splitting and deduplication
 """
 
+import os
+import tempfile
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.preprocessing import (
     CONTRACTION_MAP,
+    CONTRAST_WORDS,
     NEGATION_WORDS,
+    REQUIRED_COLUMNS,
     clean_dataset,
     clean_text,
     expand_contractions,
     get_wordnet_pos,
     lemmatize_tokens,
+    load_dataset,
     preprocess_text,
     remove_stopwords,
     split_data,
@@ -36,7 +43,7 @@ class TestContractionExpansion:
     def test_standard_contractions(self):
         assert expand_contractions("I don't like it") == "I do not like it"
         assert expand_contractions("He won't come") == "He will not come"
-        assert expand_contractions("They can't swim") == "They cannot have" or "They cannot swim"
+        assert "cannot" in expand_contractions("They can't swim")
         assert expand_contractions("It's amazing") == "It is amazing"
 
     def test_curly_typographical_apostrophes(self):
@@ -83,7 +90,6 @@ class TestTextCleaning:
     def test_repeated_punctuation_normalization(self):
         raw = "Terrible movie!!!!!! What were they thinking????"
         cleaned = clean_text(raw)
-        # Should normalize repeated ! and ? while preserving the cue
         assert "!" in cleaned
         assert "!" not in cleaned.replace("!", "", 1) or "! " in cleaned
         assert "?" in cleaned
@@ -129,13 +135,25 @@ class TestTokenization:
 
 
 class TestStopwordRemovalAndNegationPreservation:
-    """Tests for stopword removal with negation preservation."""
+    """Tests for stopword removal with negation and contrast preservation."""
 
     def test_negations_are_strictly_preserved(self):
         negation_tokens = ["not", "no", "never", "neither", "nor", "hardly", "barely", "without"]
         filtered = remove_stopwords(negation_tokens, preserve_negations=True)
         for neg in negation_tokens:
             assert neg in filtered, f"Negation '{neg}' was erroneously removed!"
+
+    def test_contrast_words_preserved(self):
+        tokens = ["the", "plot", "was", "slow", ",", "but", "the", "acting", "was", "good"]
+        filtered = remove_stopwords(tokens, preserve_contrast=True)
+        assert "but" in filtered
+        assert "the" not in filtered
+        assert "was" not in filtered
+
+    def test_contrast_words_disabled(self):
+        tokens = ["the", "plot", "was", "slow", ",", "but", "good"]
+        filtered = remove_stopwords(tokens, preserve_contrast=False)
+        assert "but" not in filtered
 
     def test_standard_stopwords_removed(self):
         tokens = ["the", "movie", "was", "a", "great", "production", "of", "an", "original", "story"]
@@ -186,11 +204,13 @@ class TestEndToEndPreprocessing:
     """Tests for preprocess_text function."""
 
     def test_full_pipeline_string_output(self):
-        raw = "The acting wasn't good at all!<br />I wouldn't recommend it."
+        raw = "The acting wasn't good at all!<br />I wouldn't recommend it, but visuals were nice."
         processed = preprocess_text(raw, return_tokens=False)
         assert isinstance(processed, str)
         # Verify negations preserved
         assert "not" in processed
+        # Verify contrast conjunction preserved
+        assert "but" in processed
         # Verify contractions expanded
         assert "wasn't" not in processed
         assert "wouldn't" not in processed
@@ -213,6 +233,46 @@ class TestEndToEndPreprocessing:
         assert preprocess_text("", return_tokens=True) == []
 
 
+class TestDatasetLoadingAndValidation:
+    """Tests for load_dataset column validation."""
+
+    def test_load_dataset_valid_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write("review,sentiment\nThis was great!,positive\nAwful,negative\n")
+            temp_path = f.name
+        try:
+            df = load_dataset(temp_path)
+            assert len(df) == 2
+            assert "review" in df.columns
+            assert "sentiment" in df.columns
+        finally:
+            os.remove(temp_path)
+
+    def test_load_dataset_missing_columns(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write("text,label\nThis was great!,1\nAwful,0\n")
+            temp_path = f.name
+        try:
+            with pytest.raises(ValueError, match="missing required columns"):
+                load_dataset(temp_path)
+        finally:
+            os.remove(temp_path)
+
+    def test_load_dataset_empty_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write("")
+            temp_path = f.name
+        try:
+            with pytest.raises(Exception):
+                load_dataset(temp_path)
+        finally:
+            os.remove(temp_path)
+
+    def test_load_dataset_nonexistent_file(self):
+        with pytest.raises(FileNotFoundError):
+            load_dataset("nonexistent_file_path_12345.csv")
+
+
 class TestDataCleaningAndSplitting:
     """Tests for dataset deduplication, validation, and stratified splitting."""
 
@@ -221,24 +281,24 @@ class TestDataCleaningAndSplitting:
             "review": ["Great film", "Bad movie", "Great film", None, "Another one"],
             "sentiment": ["positive", "negative", "positive", "positive", "negative"],
         }
-        df = pd.DataFrame(data)
-        cleaned = clean_dataset(df)
-        assert len(cleaned) == 3
-        assert cleaned.isnull().sum().sum() == 0
-        assert cleaned.duplicated().sum() == 0
+        raw_df = pd.DataFrame(data)
+        cleaned_df = clean_dataset(raw_df)
+        assert len(cleaned_df) == 3
+        assert cleaned_df.isnull().sum().sum() == 0
+        assert cleaned_df.duplicated().sum() == 0
 
     def test_split_data_stratification_and_ratio(self):
-        # Create a synthetic dataset with known 60:40 class distribution
+        """Single clean definition ensuring 80:20 split and exact stratification."""
         reviews = [f"review_{i}" for i in range(100)]
         sentiments = ["positive"] * 60 + ["negative"] * 40
-        df = pd.DataFrame({"review": reviews, "sentiment": sentiments})
+        dataset = pd.DataFrame({"review": reviews, "sentiment": sentiments})
 
-        train_df, test_df = split_data(df, target_col="sentiment", test_size=0.2, random_state=42)
+        train_df, test_df = split_data(dataset, target_col="sentiment", test_size=0.2, random_state=42)
 
         assert len(train_df) == 80
         assert len(test_df) == 20
 
-        # Check stratification
+        # Verify class proportions are stratified
         train_pos_pct = (train_df["sentiment"] == "positive").mean()
         test_pos_pct = (test_df["sentiment"] == "positive").mean()
         assert np.isclose(train_pos_pct, 0.60, atol=0.01)
@@ -247,16 +307,15 @@ class TestDataCleaningAndSplitting:
     def test_split_data_reproducibility(self):
         reviews = [f"review_{i}" for i in range(50)]
         sentiments = ["positive"] * 25 + ["negative"] * 25
-        df = pd.DataFrame({"review": reviews, "sentiment": sentiments})
+        dataset = pd.DataFrame({"review": reviews, "sentiment": sentiments})
 
-        train_df1, test_df1 = split_data(df, random_state=42)
-        train_df2, test_df2 = split_data(df, random_state=42)
+        train_df1, test_df1 = split_data(dataset, random_state=42)
+        train_df2, test_df2 = split_data(dataset, random_state=42)
 
         pd.testing.assert_frame_equal(train_df1, train_df2)
         pd.testing.assert_frame_equal(test_df1, test_df2)
 
     def test_split_data_invalid_column(self):
-        df = pd.DataFrame({"text": ["a", "b"], "label": [1, 0]})
+        dataset = pd.DataFrame({"text": ["a", "b"], "label": [1, 0]})
         with pytest.raises(ValueError, match="Target column 'sentiment' not found"):
-            split_data(df, target_col="sentiment")
-
+            split_data(dataset, target_col="sentiment")

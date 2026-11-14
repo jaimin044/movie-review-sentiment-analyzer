@@ -9,7 +9,7 @@ movie-review-sentiment-analyzer/
 │
 ├── data/
 │   ├── raw/
-│   │   └── IMDB_Dataset.csv
+│   │   └── IMDB Dataset.csv
 │   └── processed/
 │       ├── train.csv
 │       └── test.csv
@@ -65,7 +65,9 @@ Standard, off-the-shelf NLP preprocessing pipelines typically apply aggressive t
    > The negative sentiment is flipped to positive, directly damaging model accuracy.
 2. **Clause Boundary Loss via Punctuation Removal**:
    Context-aware feature engineering requires knowing where a negation clause starts and where it ends. For instance, in *"It was not good, but I loved the music!"*, the negation `not` applies only up to the comma/conjunction. If all punctuation is erased, negation scope leaks across clauses.
-3. **Contraction Degradation**:
+3. **Contrastive Shift Conjunction Loss**:
+   Conjunctions like *"but"*, *"however"*, *"although"* signal crucial sentiment reversals. Preserving them by default allows downstream feature engineers to extract sentiment shifter signals.
+4. **Contraction Degradation**:
    Contractions like `wasn't`, `couldn't`, `won't` hide negation words. Expanding them to `was not`, `could not`, `will not` reveals the canonical negation word `not` so subsequent modules can process them consistently.
 
 ---
@@ -77,7 +79,7 @@ Standard, off-the-shelf NLP preprocessing pipelines typically apply aggressive t
 | **HTML Cleaning** | Strip tags or ignore | Regex replacement with a single space (`' '`) | Replaces `<br />`, `<div>`, etc., with spaces to prevent words on either side from merging together. |
 | **Contraction Expansion** | Strip apostrophes (`didnt`) | Dictionary + regex expansion (`didn't` -> `did not`) | Explicitly extracts canonical negation tokens (`not`) needed for negation scope analysis. |
 | **Punctuation** | Strip all punctuation | Retain sentence & clause delimiters (`.`, `!`, `?`, `,`, `;`, `:`) as discrete tokens | Preserves clause boundaries for negation scoping and emotional intensity cues (`!`, `?`). |
-| **Stopword Handling** | Remove all 198 NLTK stopwords | Remove stopwords while strictly protecting `NEGATION_WORDS` (`not`, `no`, `never`, `neither`, `nor`, `hardly`, etc.) | Prevents sentiment inversion and retains negative polarity markers. |
+| **Stopword Handling** | Remove all 198 NLTK stopwords | Remove stopwords while strictly protecting `NEGATION_WORDS` (`not`, `no`, `never`, etc.) and `CONTRAST_WORDS` (`but`, `however`, etc.) | Prevents sentiment inversion and retains negative polarity markers and contrast shift cues. |
 | **Lemmatization** | Simple noun-only lemmatizer | WordNet lemmatizer with Penn Treebank POS tag mapping | Properly lemmatizes verbs (`running` -> `run`, `was` -> `be`), adjectives (`better` -> `good`), and nouns (`movies` -> `movie`). |
 
 ---
@@ -94,7 +96,12 @@ from src.preprocessing import (
     preprocess_text,
     remove_stopwords,
     expand_contractions,
+    load_dataset,
     split_data,
+    prepare_and_save_splits,
+    NEGATION_WORDS,
+    CONTRAST_WORDS,
+    REQUIRED_COLUMNS,
 )
 ```
 
@@ -106,18 +113,24 @@ from src.preprocessing import (
 - **`tokenize_text(text: str, preserve_punctuation: bool = True) -> list[str]`**
   - **Input**: Cleaned or raw text string.
   - **Output**: List of string tokens. Punctuation marks are kept as standalone tokens by default.
-- **`remove_stopwords(tokens: list[str], preserve_negations: bool = True, preserve_punctuation: bool = True) -> list[str]`**
+- **`remove_stopwords(tokens: list[str], preserve_negations: bool = True, preserve_contrast: bool = True, preserve_punctuation: bool = True) -> list[str]`**
   - **Input**: List of string tokens.
-  - **Output**: List of tokens with standard stopwords removed, but negation words (`not`, `no`, `never`, etc.) strictly preserved.
+  - **Output**: List of tokens with standard stopwords removed, but negation words (`not`, `no`, `never`) and contrast conjunctions (`but`, `however`) preserved by default.
 - **`lemmatize_tokens(tokens: list[str], use_pos: bool = True) -> list[str]`**
   - **Input**: List of string tokens.
   - **Output**: List of lemmatized tokens with punctuation tokens untouched.
-- **`preprocess_text(text: str, return_tokens: bool = False) -> str | list[str]`**
+- **`preprocess_text(text: str, preserve_contrast: bool = True, return_tokens: bool = False) -> str | list[str]`**
   - **Input**: Raw text string.
-  - **Output**: Fully preprocessed string (default, ideal for TF-IDF / vectorizers) or list of tokens (when `return_tokens=True`).
+  - **Output**: Fully preprocessed string (default, ideal for TF-IDF / vectorizers) or list of tokens (when `return_tokens=True`). Preserves negations, contrast conjunctions, and sentence/clause punctuation by default.
+- **`load_dataset(filepath: str, required_columns: set[str] = {"review", "sentiment"}) -> pd.DataFrame`**
+  - **Input**: Path to CSV file.
+  - **Output**: Validated DataFrame containing required `review` and `sentiment` columns (raises `ValueError` if missing).
 - **`split_data(df: pd.DataFrame, target_col: str = "sentiment", test_size: float = 0.2, random_state: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]`**
   - **Input**: DataFrame containing `review` and `sentiment` columns.
   - **Output**: Tuple of `(train_df, test_df)` with identical stratified class balance.
+- **`prepare_and_save_splits(raw_csv_path: str = "data/raw/IMDB Dataset.csv", output_dir: str = "data/processed", test_size: float = 0.2, random_state: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]`**
+  - **Input**: Path to raw CSV file and output destination.
+  - **Output**: Loads dataset, cleans duplicates, generates stratified split, and saves `train.csv` and `test.csv`.
 
 ---
 
