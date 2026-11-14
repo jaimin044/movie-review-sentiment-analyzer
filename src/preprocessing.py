@@ -1,9 +1,9 @@
 """Preprocessing module for Context-Aware Movie Review Sentiment Analyzer.
 
 This module provides data cleaning, text normalization, tokenization,
-negation-aware stopword removal, lemmatization, and stratified dataset splitting.
-All functions are modular and designed to be imported by downstream feature
-engineering and modeling pipelines.
+negation-aware and contrast-aware stopword removal, lemmatization, and
+stratified dataset splitting. All functions are modular and designed to be
+imported by downstream feature engineering and modeling pipelines.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ NEGATION_WORDS: set[str] = {
     "n't",
 }
 
-# Contrastive conjunctions (optional preservation for discourse shift)
+# Contrastive conjunctions preserved by default for context-aware feature engineering
 CONTRAST_WORDS: set[str] = {
     "but",
     "however",
@@ -170,12 +170,14 @@ CONTRAST_WORDS: set[str] = {
     "though",
     "yet",
     "despite",
-    "in spite of",
     "nevertheless",
 }
 
 # Sentence boundary and clause punctuation marks
 PUNCTUATION_MARKS: set[str] = {".", "!", "?", ",", ";", ":", "-", "..."}
+
+# Required columns in the dataset schema
+REQUIRED_COLUMNS: set[str] = {"review", "sentiment"}
 
 # Compiled regex patterns for efficiency
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -443,22 +445,23 @@ def _fallback_lemma(word: str) -> str:
 def remove_stopwords(
     tokens: list[str],
     preserve_negations: bool = True,
-    preserve_contrast: bool = False,
+    preserve_contrast: bool = True,
     preserve_punctuation: bool = True,
     custom_exclude_stopwords: Optional[Set[str]] = None,
 ) -> list[str]:
     """Removes standard English stopwords while protecting critical context tokens.
 
     Critical context tokens include negation words ('not', 'no', 'never', 'neither',
-    'nor', 'hardly', etc.) and punctuation boundaries (., !, ?, etc.).
+    'nor', 'hardly', etc.), contrastive conjunctions ('but', 'however', 'although', etc.),
+    and punctuation boundaries (., !, ?, etc.).
     Preserving these tokens prevents sentiment inversion and enables downstream
-    negation scope modeling.
+    feature engineering (such as negation scope and sentiment shifter analysis).
 
     Args:
         tokens (list[str]): List of tokens to filter.
         preserve_negations (bool, optional): Whether to keep negation words. Defaults to True.
         preserve_contrast (bool, optional): Whether to keep contrast words ('but', 'however').
-            Defaults to False.
+            Defaults to True.
         preserve_punctuation (bool, optional): Whether to keep punctuation tokens. Defaults to True.
         custom_exclude_stopwords (set[str], optional): Additional words to protect from removal.
 
@@ -466,8 +469,8 @@ def remove_stopwords(
         list[str]: Filtered token list.
 
     Example:
-        >>> remove_stopwords(['the', 'movie', 'was', 'not', 'good', '!'])
-        ['movie', 'not', 'good', '!']
+        >>> remove_stopwords(['the', 'movie', 'was', 'not', 'good', ',', 'but', 'fun'])
+        ['movie', 'not', 'good', ',', 'but', 'fun']
     """
     if not tokens:
         return []
@@ -485,6 +488,10 @@ def remove_stopwords(
 
     if preserve_contrast:
         effective_stopwords -= CONTRAST_WORDS
+    else:
+        effective_stopwords.update(
+            word for word in CONTRAST_WORDS if " " not in word
+        )
 
     if custom_exclude_stopwords:
         effective_stopwords -= custom_exclude_stopwords
@@ -509,6 +516,7 @@ def preprocess_text(
     expand_contractions_flag: bool = True,
     remove_stopwords_flag: bool = True,
     preserve_negations: bool = True,
+    preserve_contrast: bool = True,
     preserve_punctuation: bool = True,
     use_pos_lemmatization: bool = True,
     return_tokens: bool = False,
@@ -518,7 +526,7 @@ def preprocess_text(
     Executes:
     1. clean_text: HTML removal, URL removal, contraction expansion, whitespace normalization.
     2. tokenize_text: Word and punctuation tokenization preserving clause boundaries.
-    3. remove_stopwords: Negation-preserving stopword elimination.
+    3. remove_stopwords: Negation- and contrast-preserving stopword elimination.
     4. lemmatize_tokens: POS-guided WordNet lemmatization.
 
     Args:
@@ -527,6 +535,8 @@ def preprocess_text(
         expand_contractions_flag (bool, optional): Expand contractions like "didn't". Defaults to True.
         remove_stopwords_flag (bool, optional): Filter stopwords. Defaults to True.
         preserve_negations (bool, optional): Protect negation words from stopword filter. Defaults to True.
+        preserve_contrast (bool, optional): Protect contrastive conjunctions ('but', 'however')
+            from stopword filter. Defaults to True.
         preserve_punctuation (bool, optional): Retain punctuation marks. Defaults to True.
         use_pos_lemmatization (bool, optional): Use POS tags for lemmatization. Defaults to True.
         return_tokens (bool, optional): If True, returns list of tokens. If False, returns
@@ -536,8 +546,8 @@ def preprocess_text(
         Union[str, list[str]]: Preprocessed text string or list of tokens.
 
     Example:
-        >>> preprocess_text("The movie wasn't good at all!")
-        'movie not good !'
+        >>> preprocess_text("The movie wasn't good, but the music was nice!")
+        'movie not good , but music nice !'
         >>> preprocess_text("The movie wasn't good at all!", return_tokens=True)
         ['movie', 'not', 'good', '!']
     """
@@ -558,11 +568,12 @@ def preprocess_text(
         preserve_punctuation=preserve_punctuation,
     )
 
-    # 3. Stopword removal (protecting negations and punctuation)
+    # 3. Stopword removal (protecting negations, contrast conjunctions, and punctuation)
     if remove_stopwords_flag:
         tokens = remove_stopwords(
             tokens=tokens,
             preserve_negations=preserve_negations,
+            preserve_contrast=preserve_contrast,
             preserve_punctuation=preserve_punctuation,
         )
 
@@ -578,11 +589,16 @@ def preprocess_text(
     return " ".join(tokens)
 
 
-def load_dataset(filepath: str) -> pd.DataFrame:
-    """Loads dataset from CSV file.
+def load_dataset(
+    filepath: str,
+    required_columns: Optional[Set[str]] = None,
+) -> pd.DataFrame:
+    """Loads dataset from CSV file and validates required columns.
 
     Args:
         filepath (str): Path to CSV dataset.
+        required_columns (set[str], optional): Set of column names that must exist.
+            Defaults to {"review", "sentiment"}.
 
     Returns:
         pd.DataFrame: Loaded DataFrame.
@@ -592,11 +608,24 @@ def load_dataset(filepath: str) -> pd.DataFrame:
         ValueError: If file is empty or missing required columns.
     """
     if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Dataset not found at: {filepath}")
+        # Graceful fallback for space vs underscore
+        alt_filepath = filepath.replace(" ", "_") if " " in filepath else filepath.replace("_", " ")
+        if os.path.exists(alt_filepath):
+            filepath = alt_filepath
+        else:
+            raise FileNotFoundError(f"Dataset not found at: {filepath}")
 
     df = pd.read_csv(filepath)
     if df.empty:
         raise ValueError(f"Dataset at {filepath} is empty.")
+
+    expected_cols = required_columns if required_columns is not None else REQUIRED_COLUMNS
+    missing_cols = expected_cols - set(df.columns)
+    if missing_cols:
+        raise ValueError(
+            f"Dataset at {filepath} is missing required columns: {sorted(list(missing_cols))}. "
+            f"Found columns: {df.columns.tolist()}"
+        )
 
     return df
 
@@ -673,7 +702,7 @@ def split_data(
 
 
 def prepare_and_save_splits(
-    raw_csv_path: str = "data/raw/IMDB_Dataset.csv",
+    raw_csv_path: str = "data/raw/IMDB Dataset.csv",
     output_dir: str = "data/processed",
     test_size: float = 0.2,
     random_state: int = 42,
@@ -685,7 +714,7 @@ def prepare_and_save_splits(
     - {output_dir}/test.csv
 
     Args:
-        raw_csv_path (str, optional): Path to raw CSV file. Defaults to 'data/raw/IMDB_Dataset.csv'.
+        raw_csv_path (str, optional): Path to raw CSV file. Defaults to 'data/raw/IMDB Dataset.csv'.
         output_dir (str, optional): Directory to save processed splits. Defaults to 'data/processed'.
         test_size (float, optional): Test split ratio. Defaults to 0.2.
         random_state (int, optional): Random seed for reproducibility. Defaults to 42.
