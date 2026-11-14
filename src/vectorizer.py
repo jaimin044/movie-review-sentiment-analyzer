@@ -132,13 +132,40 @@ class TextPreprocessor(BaseEstimator, TransformerMixin):
 
 
 class ContextFeatureTransformer(BaseEstimator, TransformerMixin):
-    """Adds negation-scope and contrastive-clause tokens to cleaned text."""
+    """Scikit-learn compatible transformer that applies negation-scoping and
+    contrastive-clause markers to preprocessed review text.
+    """
 
     def fit(self, X: Any, y: Any = None) -> "ContextFeatureTransformer":
+        """Fits the transformer. Stateless, returns self."""
         return self
 
-    def transform(self, X: Iterable[str]) -> list[str]:
-        return [apply_context_features(text) for text in X]
+    def _transform_single(self, text: str) -> str:
+        """Applies context features to a single text document."""
+        if not isinstance(text, str) or not text.strip():
+            return ""
+        return apply_context_features(text)
+
+    def transform(self, X: Union[str, Sequence[str], pd.Series, Iterable[str]]) -> list[str]:
+        """Transforms a collection of preprocessed text documents.
+
+        Args:
+            X: Single string or sequence/iterable/Series of text documents.
+
+        Returns:
+            list[str]: Documents with negation-scoped and contrastive-clause markers.
+        """
+        if isinstance(X, str):
+            return [self._transform_single(X)]
+
+        if hasattr(X, "tolist"):
+            docs = [str(x) if pd.notna(x) else "" for x in X.tolist()]
+        elif isinstance(X, (list, tuple)):
+            docs = [str(x) if x is not None else "" for x in X]
+        else:
+            docs = [str(x) if x is not None else "" for x in X]
+
+        return [self._transform_single(doc) for doc in docs]
 
 
 def create_preprocessor(

@@ -9,6 +9,7 @@ from src.train import (
     LABEL_ORDER,
     load_and_validate_data,
     train_baseline_models,
+    train_context_models,
     validate_dataset_schema,
 )
 
@@ -100,5 +101,58 @@ class TestBaselineTrainingMini:
             lr_pipe = results["baseline_logistic"]["pipeline"]
 
             # Test inference on raw review
+            assert nb_pipe.predict(["A brilliant and wonderful film!"])[0] == "positive"
+            assert lr_pipe.predict(["A terrible, dull, and awful movie."])[0] == "negative"
+
+    def test_mini_context_training_and_saving(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = os.path.join(tmpdir, "train.csv")
+            test_path = os.path.join(tmpdir, "test.csv")
+            models_dir = os.path.join(tmpdir, "models")
+
+            train_df = pd.DataFrame({
+                "review": [
+                    "This is an amazing and fantastic film! Truly fantastic and wonderful.",
+                    "Loved the amazing film, wonderful acting, absolutely fantastic.",
+                    "Truly a wonderful experience, brilliantly directed and fantastic.",
+                    "Terrible, awful, horrible worst film I have ever seen.",
+                    "Boring, terrible, awful, horrible waste of time.",
+                    "Hated every single second of this awful terrible horrible film.",
+                ],
+                "sentiment": ["positive", "positive", "positive", "negative", "negative", "negative"],
+            })
+            test_df = pd.DataFrame({
+                "review": [
+                    "Fantastic and wonderful film, truly amazing!",
+                    "Terrible, awful, and horrible movie.",
+                ],
+                "sentiment": ["positive", "negative"],
+            })
+
+            train_df.to_csv(train_path, index=False)
+            test_df.to_csv(test_path, index=False)
+
+            results = train_context_models(
+                train_path=train_path,
+                test_path=test_path,
+                models_dir=models_dir,
+                train_cache_path=os.path.join(tmpdir, "train_clean.csv"),
+                test_cache_path=os.path.join(tmpdir, "test_clean.csv"),
+                force_recompute=True,
+                n_jobs=1,
+            )
+
+            assert "context_nb" in results
+            assert "context_logistic" in results
+
+            nb_path = os.path.join(models_dir, "context_nb.joblib")
+            lr_path = os.path.join(models_dir, "context_logistic.joblib")
+
+            assert os.path.exists(nb_path)
+            assert os.path.exists(lr_path)
+
+            nb_pipe = results["context_nb"]["pipeline"]
+            lr_pipe = results["context_logistic"]["pipeline"]
+
             assert nb_pipe.predict(["A brilliant and wonderful film!"])[0] == "positive"
             assert lr_pipe.predict(["A terrible, dull, and awful movie."])[0] == "negative"

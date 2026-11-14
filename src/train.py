@@ -1,11 +1,14 @@
 """Model training module for Context-Aware Movie Review Sentiment Analyzer.
 
-Trains, evaluates, and serializes baseline machine learning models:
+Trains, evaluates, and serializes baseline and context-aware machine learning models:
 - Experiment 1 (E1): Baseline TF-IDF + Multinomial Naive Bayes
 - Experiment 2 (E2): Baseline TF-IDF + Logistic Regression
+- Experiment 3 (E3): Context-Aware TF-IDF + Multinomial Naive Bayes
+- Experiment 4 (E4): Context-Aware TF-IDF + Logistic Regression
 
-Saves complete, self-contained end-to-end inference pipelines:
-    Raw review -> TextPreprocessor -> TfidfVectorizer -> Classifier -> Sentiment
+Saves complete, self-contained end-to-end inference pipelines accepting raw text:
+    Baseline: Raw review -> TextPreprocessor -> TfidfVectorizer -> Classifier -> Sentiment
+    Context:  Raw review -> TextPreprocessor -> ContextFeatureTransformer -> TfidfVectorizer -> Classifier -> Sentiment
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from sklearn.pipeline import Pipeline
 
 from src.preprocessing import REQUIRED_COLUMNS, load_dataset
 from src.vectorizer import (
+    ContextFeatureTransformer,
     TextPreprocessor,
     build_baseline_pipeline,
     build_context_pipeline,
@@ -349,78 +353,242 @@ def verify_serialized_pipelines(models_dir: str = "models") -> None:
         "A complete disaster. Dull, predictable, and awful acting throughout the film.",
         "The movie was not good at all, completely lacked any emotional depth or spark.",
         "The acting was surprisingly good, but the screenplay was a terrible mess.",
+        "I expected a bad movie; however, it was surprisingly enjoyable.",
     ]
 
-    for model_name, filename in [
+    models_to_verify = [
         ("Baseline Naive Bayes (E1)", "baseline_nb.joblib"),
         ("Baseline Logistic Regression (E2)", "baseline_logistic.joblib"),
-    ]:
+        ("Context-Aware Naive Bayes (E3)", "context_nb.joblib"),
+        ("Context-Aware Logistic Regression (E4)", "context_logistic.joblib"),
+    ]
+
+    for model_name, filename in models_to_verify:
         model_path = os.path.join(models_dir, filename)
         if not os.path.exists(model_path):
-            print(f"[ERROR] Model artifact missing at: {model_path}")
+            print(f"[SKIP] Model artifact not found at: {model_path}")
             continue
 
         print(f"\nTesting loaded pipeline from: {model_path} ({model_name})")
         loaded_pipe = joblib.load(model_path)
         predictions = loaded_pipe.predict(sample_reviews)
-        probabilities = loaded_pipe.predict_proba(sample_reviews)
+        has_proba = hasattr(loaded_pipe, "predict_proba")
+        probabilities = loaded_pipe.predict_proba(sample_reviews) if has_proba else None
         classes = list(loaded_pipe.classes_)
 
-        for rev, pred, proba in zip(sample_reviews, predictions, probabilities):
-            pos_idx = classes.index("positive")
-            confidence = proba[pos_idx] if pred == "positive" else proba[classes.index("negative")]
+        for idx, (rev, pred) in enumerate(zip(sample_reviews, predictions)):
+            pred_str = str(pred)
+            if has_proba and probabilities is not None:
+                pos_idx = classes.index("positive")
+                conf = probabilities[idx][pos_idx] if pred_str == "positive" else probabilities[idx][classes.index("negative")]
+                conf_str = f"Confidence: {conf:.2%}"
+                proba_dict = dict(zip(classes, [round(float(p), 4) for p in probabilities[idx]]))
+            else:
+                conf_str = "Confidence: N/A"
+                proba_dict = {}
+
             print(f"  Input: \"{rev}\"")
-            print(f"    -> Prediction: {pred.upper()} (Confidence: {confidence:.2%})")
-            print(f"    -> Probabilities: {dict(zip(classes, [round(p, 4) for p in proba]))}")
+            print(f"    -> Prediction: {pred_str.upper()} ({conf_str})")
+            if proba_dict:
+                print(f"    -> Probabilities: {proba_dict}")
 
 
 def train_context_models(
     train_path: str = "data/processed/train.csv",
     test_path: str = "data/processed/test.csv",
     models_dir: str = "models",
+    train_cache_path: str = "data/processed/train_preprocessed.csv",
+    test_cache_path: str = "data/processed/test_preprocessed.csv",
+    force_recompute: bool = False,
     n_jobs: int = -1,
 ) -> dict[str, Any]:
-    """Train E3/E4 using context-aware negation and contrastive features."""
+    """Trains, evaluates, and serializes context-aware models E3 and E4.
 
+    Workflow:
+    1. Load and validate train.csv and test.csv.
+    2. Obtain preprocessed text (from cache if valid, otherwise recomputes).
+    3. Apply context features (negation scoping and contrastive clauses).
+    4. Fit TF-IDF vectorizer EXCLUSIVELY on training context features.
+    5. Train E3: Context-Aware TF-IDF + Multinomial Naive Bayes (alpha=1.0).
+    6. Train E4: Context-Aware TF-IDF + Logistic Regression (C=1.0, max_iter=1000, random_state=42).
+    7. Package complete end-to-end scikit-learn Pipelines:
+       [preprocessor -> context_features -> tfidf -> classifier].
+    8. Serialize to models/context_nb.joblib and models/context_logistic.joblib.
+    9. Print comprehensive evaluation metrics and classification reports.
+
+    Args:
+        train_path: Path to train.csv.
+        test_path: Path to test.csv.
+        models_dir: Directory where serialized models will be saved.
+        train_cache_path: Path to cached preprocessed training data.
+        test_cache_path: Path to cached preprocessed testing data.
+        force_recompute: Whether to ignore preprocessed cache.
+        n_jobs: Number of parallel jobs for preprocessing.
+
+    Returns:
+        dict[str, Any]: Dictionary containing trained pipelines, vectorizer, and evaluation metrics.
+    """
     os.makedirs(models_dir, exist_ok=True)
+
+    # 1. Load and validate data
     train_df, test_df = load_and_validate_data(train_path, test_path)
+    X_train_raw = train_df["review"].tolist()
+    y_train = train_df["sentiment"].tolist()
+    X_test_raw = test_df["review"].tolist()
+    y_test = test_df["sentiment"].tolist()
+
+    # 2. Obtain preprocessed texts (reusing validated cache if available)
+    X_train_clean = get_preprocessed_texts(
+        X_train_raw,
+        cache_path=train_cache_path,
+        force_recompute=force_recompute,
+        n_jobs=n_jobs,
+        description="training data",
+    )
+    X_test_clean = get_preprocessed_texts(
+        X_test_raw,
+        cache_path=test_cache_path,
+        force_recompute=force_recompute,
+        n_jobs=n_jobs,
+        description="testing data",
+    )
+
+    # 3. Apply context features (negation scoping & contrastive clauses)
+    print("\nApplying context-aware feature transformations (negation & contrast)...")
+    context_start = time.time()
+    context_transformer = ContextFeatureTransformer()
+    X_train_context = context_transformer.transform(X_train_clean)
+    X_test_context = context_transformer.transform(X_test_clean)
+    print(f"Context feature transformation complete in {time.time() - context_start:.2f}s.")
+
+    # 4. Fit TF-IDF vectorizer EXCLUSIVELY on training context data
+    print("\nFitting context-aware TF-IDF vectorizer on training data...")
+    tfidf_start = time.time()
+    vectorizer = create_baseline_vectorizer()
+    X_train_tfidf = vectorizer.fit_transform(X_train_context)
+    X_test_tfidf = vectorizer.transform(X_test_context)
+    print(f"Context TF-IDF fitting complete in {time.time() - tfidf_start:.2f}s.")
+    print(f"Context Vocabulary size: {len(vectorizer.vocabulary_):,} features.")
+    print(f"Training Context TF-IDF matrix shape: {X_train_tfidf.shape}")
+    print(f"Testing Context TF-IDF matrix shape:  {X_test_tfidf.shape}")
+
     results: dict[str, Any] = {}
-    configs = {
-        "context_nb": MultinomialNB(alpha=1.0),
-        "context_logistic": LogisticRegression(
-            C=1.0, max_iter=1000, random_state=42, solver="lbfgs"
-        ),
+
+    # Inference preprocessor step for saved pipelines (n_jobs=1 for fast inference)
+    inference_preprocessor = create_preprocessor(n_jobs=1)
+
+    # -------------------------------------------------------------------------
+    # Experiment 3 (E3): Context-Aware TF-IDF + Multinomial Naive Bayes
+    # -------------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("Training Experiment 3 (E3): Context-Aware TF-IDF + Multinomial Naive Bayes")
+    print("=" * 70)
+    nb_start = time.time()
+    nb_clf = MultinomialNB(alpha=1.0)
+    nb_clf.fit(X_train_tfidf, y_train)
+    nb_train_time = time.time() - nb_start
+
+    # Assemble complete end-to-end pipeline: Raw text -> Preprocess -> Context -> TF-IDF -> Classifier
+    pipeline_nb = Pipeline(
+        steps=[
+            ("preprocessor", inference_preprocessor),
+            ("context_features", ContextFeatureTransformer()),
+            ("tfidf", vectorizer),
+            ("classifier", nb_clf),
+        ]
+    )
+
+    # Evaluate E3
+    y_pred_nb = nb_clf.predict(X_test_tfidf)
+    acc_nb = accuracy_score(y_test, y_pred_nb)
+    prec_nb = precision_score(y_test, y_pred_nb, pos_label="positive", zero_division=0)
+    rec_nb = recall_score(y_test, y_pred_nb, pos_label="positive", zero_division=0)
+    f1_nb = f1_score(y_test, y_pred_nb, pos_label="positive", zero_division=0)
+
+    print(f"E3 Training time: {nb_train_time:.2f}s")
+    print(f"E3 Test Accuracy:  {acc_nb:.4f} ({acc_nb * 100:.2f}%)")
+    print(f"E3 Test Precision: {prec_nb:.4f}")
+    print(f"E3 Test Recall:    {rec_nb:.4f}")
+    print(f"E3 Test F1-Score:  {f1_nb:.4f}")
+    print("\nClassification Report (E3 - Context Naive Bayes):")
+    print(classification_report(y_test, y_pred_nb, labels=LABEL_ORDER, digits=4, zero_division=0))
+
+    # Serialize E3 pipeline
+    nb_model_path = os.path.join(models_dir, "context_nb.joblib")
+    joblib.dump(pipeline_nb, nb_model_path)
+    print(f"Saved E3 pipeline to: {nb_model_path}")
+
+    results["context_nb"] = {
+        "pipeline": pipeline_nb,
+        "model_path": nb_model_path,
+        "accuracy": acc_nb,
+        "precision": prec_nb,
+        "recall": rec_nb,
+        "f1": f1_nb,
     }
-    for model_id, classifier in configs.items():
-        pipeline = build_context_pipeline(
-            classifier,
-            preprocessor_kwargs={"n_jobs": n_jobs},
-        )
-        pipeline.fit(train_df["review"], train_df["sentiment"])
-        predictions = pipeline.predict(test_df["review"])
-        metrics = {
-            "accuracy": accuracy_score(test_df["sentiment"], predictions),
-            "precision": precision_score(
-                test_df["sentiment"], predictions, pos_label="positive", zero_division=0
-            ),
-            "recall": recall_score(
-                test_df["sentiment"], predictions, pos_label="positive", zero_division=0
-            ),
-            "f1": f1_score(
-                test_df["sentiment"], predictions, pos_label="positive", zero_division=0
-            ),
-        }
-        model_path = os.path.join(models_dir, f"{model_id}.joblib")
-        joblib.dump(pipeline, model_path)
-        results[model_id] = {"pipeline": pipeline, "model_path": model_path, **metrics}
-        print(f"{model_id}: accuracy={metrics['accuracy']:.4f}")
+
+    # -------------------------------------------------------------------------
+    # Experiment 4 (E4): Context-Aware TF-IDF + Logistic Regression
+    # -------------------------------------------------------------------------
+    print("\n" + "=" * 70)
+    print("Training Experiment 4 (E4): Context-Aware TF-IDF + Logistic Regression")
+    print("=" * 70)
+    lr_start = time.time()
+    lr_clf = LogisticRegression(
+        C=1.0,
+        max_iter=1000,
+        random_state=42,
+        solver="lbfgs",
+    )
+    lr_clf.fit(X_train_tfidf, y_train)
+    lr_train_time = time.time() - lr_start
+
+    # Assemble complete end-to-end pipeline: Raw text -> Preprocess -> Context -> TF-IDF -> Classifier
+    pipeline_lr = Pipeline(
+        steps=[
+            ("preprocessor", inference_preprocessor),
+            ("context_features", ContextFeatureTransformer()),
+            ("tfidf", vectorizer),
+            ("classifier", lr_clf),
+        ]
+    )
+
+    # Evaluate E4
+    y_pred_lr = lr_clf.predict(X_test_tfidf)
+    acc_lr = accuracy_score(y_test, y_pred_lr)
+    prec_lr = precision_score(y_test, y_pred_lr, pos_label="positive", zero_division=0)
+    rec_lr = recall_score(y_test, y_pred_lr, pos_label="positive", zero_division=0)
+    f1_lr = f1_score(y_test, y_pred_lr, pos_label="positive", zero_division=0)
+
+    print(f"E4 Training time: {lr_train_time:.2f}s")
+    print(f"E4 Test Accuracy:  {acc_lr:.4f} ({acc_lr * 100:.2f}%)")
+    print(f"E4 Test Precision: {prec_lr:.4f}")
+    print(f"E4 Test Recall:    {rec_lr:.4f}")
+    print(f"E4 Test F1-Score:  {f1_lr:.4f}")
+    print("\nClassification Report (E4 - Context Logistic Regression):")
+    print(classification_report(y_test, y_pred_lr, labels=LABEL_ORDER, digits=4, zero_division=0))
+
+    # Serialize E4 pipeline
+    lr_model_path = os.path.join(models_dir, "context_logistic.joblib")
+    joblib.dump(pipeline_lr, lr_model_path)
+    print(f"Saved E4 pipeline to: {lr_model_path}")
+
+    results["context_logistic"] = {
+        "pipeline": pipeline_lr,
+        "model_path": lr_model_path,
+        "accuracy": acc_lr,
+        "precision": prec_lr,
+        "recall": rec_lr,
+        "f1": f1_lr,
+    }
+
     return results
 
 
 def main() -> None:
     """Main execution function with CLI argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Train, evaluate, and serialize baseline sentiment analysis models (E1 & E2)."
+        description="Train, evaluate, and serialize baseline and context-aware sentiment analysis models (E1–E4)."
     )
     parser.add_argument(
         "--train-path",
@@ -453,6 +621,16 @@ def main() -> None:
         help="Ignore cached preprocessed texts and recompute",
     )
     parser.add_argument(
+        "--skip-baseline",
+        action="store_true",
+        help="Skip training baseline models (E1 & E2)",
+    )
+    parser.add_argument(
+        "--skip-context",
+        action="store_true",
+        help="Skip training context-aware models (E3 & E4)",
+    )
+    parser.add_argument(
         "--n-jobs",
         type=int,
         default=-1,
@@ -460,22 +638,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    train_baseline_models(
-        train_path=args.train_path,
-        test_path=args.test_path,
-        models_dir=args.models_dir,
-        train_cache_path=args.train_cache,
-        test_cache_path=args.test_cache,
-        force_recompute=args.force_recompute,
-        n_jobs=args.n_jobs,
-    )
+    if not args.skip_baseline:
+        train_baseline_models(
+            train_path=args.train_path,
+            test_path=args.test_path,
+            models_dir=args.models_dir,
+            train_cache_path=args.train_cache,
+            test_cache_path=args.test_cache,
+            force_recompute=args.force_recompute,
+            n_jobs=args.n_jobs,
+        )
 
-    train_context_models(
-        train_path=args.train_path,
-        test_path=args.test_path,
-        models_dir=args.models_dir,
-        n_jobs=args.n_jobs,
-    )
+    if not args.skip_context:
+        train_context_models(
+            train_path=args.train_path,
+            test_path=args.test_path,
+            models_dir=args.models_dir,
+            train_cache_path=args.train_cache,
+            test_cache_path=args.test_cache,
+            force_recompute=args.force_recompute,
+            n_jobs=args.n_jobs,
+        )
 
     verify_serialized_pipelines(models_dir=args.models_dir)
 

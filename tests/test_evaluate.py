@@ -98,8 +98,12 @@ class TestPipelineDiscovery:
         pipelines = load_saved_pipelines(models_dir="models")
         assert "baseline_nb" in pipelines
         assert "baseline_logistic" in pipelines
+        assert "context_nb" in pipelines
+        assert "context_logistic" in pipelines
         assert "pipeline" in pipelines["baseline_nb"]
         assert "pipeline" in pipelines["baseline_logistic"]
+        assert "pipeline" in pipelines["context_nb"]
+        assert "pipeline" in pipelines["context_logistic"]
 
     def test_load_saved_pipelines_nonexistent_dir_raises(self):
         with tempfile.TemporaryDirectory() as empty_dir:
