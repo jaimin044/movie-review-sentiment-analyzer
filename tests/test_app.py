@@ -222,3 +222,4 @@ class TestModelArtifactsAndReportFiles:
         status = check_confusion_matrix_status(tmp_path)
         for mid, img_path in status.items():
             assert img_path is None
+
