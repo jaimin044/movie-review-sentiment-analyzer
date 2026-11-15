@@ -1,184 +1,191 @@
-# Movie Review Sentiment Analyzer
+# Context-Aware Movie Review Sentiment Analyzer
 
-An end-to-end NLP project for movie review sentiment analysis with context-aware features and machine learning models.
+An academic natural language processing (NLP) application comparing conventional baseline TF-IDF classification against rule-based context-aware feature engineering (negation scope and contrastive clause marking) on the IMDb 50,000 Movie Reviews dataset.
 
-## Project Structure
+---
 
-```
+## 📌 Project Overview
+
+Sentiment analysis often fails on nuanced syntax such as negation (*"not good"*) and contrastive shifts (*"the visuals were great, but the plot was boring"*). Standard bag-of-words pipelines frequently invert polarity by stripping negation words as stopwords and ignoring clause boundaries.
+
+This project investigates whether explicitly marking syntactic context improves sentiment classification across two distinct linear architectures: **Multinomial Naive Bayes** and **Logistic Regression**.
+
+### Key Highlights
+- **Dataset**: IMDb 50K Movie Reviews (49,582 clean unique reviews, 80:20 stratified split).
+- **Core Technology Stack**: Python, Scikit-learn, NLTK, Pandas, NumPy, Matplotlib, Seaborn, Plotly, Streamlit, Joblib, Pytest.
+- **End-to-End Pipeline**: Modular data cleaning, context feature extraction, TF-IDF vectorization, model training, evaluation, and an interactive Streamlit web dashboard.
+- **Test Coverage**: 120 automated unit and integration tests passing with 100% success.
+
+---
+
+## 🏛️ System Architecture
+
+```text
 movie-review-sentiment-analyzer/
 │
-├── data/
-│   ├── raw/
-│   │   └── IMDB Dataset.csv
-│   └── processed/
-│       ├── train.csv
-│       └── test.csv
-│
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_text_preprocessing.ipynb
-│   ├── 03_context_aware_features.ipynb
-│   ├── 04_tfidf_experiments.ipynb
-│   ├── 05_model_training.ipynb
-│   └── 06_model_evaluation.ipynb
+├── app.py                     # Streamlit frontend & interactive dashboard
+├── requirements.txt           # Python package dependencies
+├── README.md                  # Project documentation & benchmark analysis
 │
 ├── src/
-│   ├── __init__.py
-│   ├── preprocessing.py
-│   ├── context_features.py
-│   ├── vectorizer.py
-│   ├── train.py
-│   ├── predict.py
-│   └── evaluate.py
+│   ├── __init__.py            # Package root & public exports
+│   ├── preprocessing.py       # Cleaning, contraction expansion, lemmatization, splitting
+│   ├── context_features.py    # Negation scope (NOT_) & contrast marking (BEFORE_BUT_/AFTER_BUT_)
+│   ├── vectorizer.py          # TF-IDF vectorizers & scikit-learn transformer pipelines
+│   ├── train.py               # Model training, serialization, & pipeline persistence
+│   ├── evaluate.py            # Comprehensive evaluation metrics & dark-themed plots
+│   └── predict.py             # Inference API with in-memory pipeline caching
 │
-├── models/
+├── models/                    # Serialized .joblib model pipelines (E1–E4)
+│   ├── baseline_nb.joblib
+│   ├── baseline_logistic.joblib
+│   ├── context_nb.joblib
+│   └── context_logistic.joblib
 │
-├── tests/
-│   ├── test_preprocessing.py
-│   ├── test_context_features.py
-│   └── test_prediction.py
+├── reports/                   # Evaluation artifacts & visualization figures
+│   ├── evaluation_results.csv
+│   ├── classification_reports.txt
+│   ├── confusion_matrix_baseline_nb.png
+│   ├── confusion_matrix_baseline_logistic.png
+│   ├── confusion_matrix_context_nb.png
+│   ├── confusion_matrix_context_logistic.png
+│   └── model_comparison.png
 │
-├── reports/
+├── notebooks/                 # Exploratory data analysis & preprocessing notebooks
+│   ├── 01_data_exploration.ipynb
+│   └── 02_text_preprocessing.ipynb
 │
-├── app.py
-├── requirements.txt
-├── README.md
-└── .gitignore
+└── tests/                     # 120 automated test cases
+    ├── test_app.py
+    ├── test_preprocessing.py
+    ├── test_context_features.py
+    ├── test_vectorizer.py
+    ├── test_train.py
+    ├── test_evaluate.py
+    └── test_prediction.py
 ```
 
 ---
 
-## NLP Data Preprocessing Architecture & Decisions
+## 🔬 The Four Classification Experiments
 
-### 1. The Sentiment Analysis Preprocessing Dilemma
-Standard, off-the-shelf NLP preprocessing pipelines typically apply aggressive transformations:
-- Stripping all punctuation
-- Stripping all stopwords using generic stopword lists (e.g., standard NLTK stopwords)
-- Stripping or naive splitting of apostrophes (`didn't` -> `didnt` or `did` + `nt`)
+All models were evaluated on the exact same held-out test partition (**9,917 reviews**, 50.19% positive, 49.81% negative).
 
-**Why this ruins sentiment analysis:**
-1. **Sentiment Inversion via Naive Stopword Removal**:
-   Standard NLTK English stopwords list contains `not`, `no`, `nor`, `neither`, `wasn't`, `didn't`, `wouldn't`, etc.
-   If applied naively:
-   > *"The movie was not good and I did not enjoy it."*  
-   > **Naive Stopword Output:** `['movie', 'good', 'enjoy']`  
-   > The negative sentiment is flipped to positive, directly damaging model accuracy.
-2. **Clause Boundary Loss via Punctuation Removal**:
-   Context-aware feature engineering requires knowing where a negation clause starts and where it ends. For instance, in *"It was not good, but I loved the music!"*, the negation `not` applies only up to the comma/conjunction. If all punctuation is erased, negation scope leaks across clauses.
-3. **Contrastive Shift Conjunction Loss**:
-   Conjunctions like *"but"*, *"however"*, *"although"* signal crucial sentiment reversals. Preserving them by default allows downstream feature engineers to extract sentiment shifter signals.
-4. **Contraction Degradation**:
-   Contractions like `wasn't`, `couldn't`, `won't` hide negation words. Expanding them to `was not`, `could not`, `will not` reveals the canonical negation word `not` so subsequent modules can process them consistently.
+| Experiment | Model ID | Feature Engineering | Classifier | Accuracy | Precision | Recall | F1-Score |
+| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| **E1** | `baseline_nb` | Baseline Unigram TF-IDF (46,864 terms) | Multinomial Naive Bayes ($\alpha=1.0$) | 86.13% | 87.26% | 84.75% | 85.99% |
+| **E2** | `baseline_logistic` | Baseline Unigram TF-IDF (46,864 terms) | Logistic Regression ($C=1.0$, L2) | **89.29%** | **88.48%** | **90.44%** | **89.45%** |
+| **E3** | `context_nb` | Context Unigrams + Bigrams (102,568 terms) | Multinomial Naive Bayes ($\alpha=1.0$) | 85.80% | 87.05% | 84.25% | 85.62% |
+| **E4** | `context_logistic` | Context Unigrams + Bigrams (102,568 terms) | Logistic Regression ($C=1.0$, L2) | 88.99% | 88.14% | 90.19% | 89.16% |
+
+> **🏆 Best Performing Model**: **Experiment 2 (Baseline Logistic Regression)** achieved the highest test accuracy (**89.29%**) and F1-score (**89.45%**).
 
 ---
 
-### 2. Context-Aware Preprocessing Decisions
+## 📊 Honest Academic Discussion & Insights
 
-| Preprocessing Step | Traditional Approach | Our Context-Aware Approach | Motivation & Impact |
-| :--- | :--- | :--- | :--- |
-| **HTML Cleaning** | Strip tags or ignore | Regex replacement with a single space (`' '`) | Replaces `<br />`, `<div>`, etc., with spaces to prevent words on either side from merging together. |
-| **Contraction Expansion** | Strip apostrophes (`didnt`) | Dictionary + regex expansion (`didn't` -> `did not`) | Explicitly extracts canonical negation tokens (`not`) needed for negation scope analysis. |
-| **Punctuation** | Strip all punctuation | Retain sentence & clause delimiters (`.`, `!`, `?`, `,`, `;`, `:`) as discrete tokens | Preserves clause boundaries for negation scoping and emotional intensity cues (`!`, `?`). |
-| **Stopword Handling** | Remove all 198 NLTK stopwords | Remove stopwords while strictly protecting `NEGATION_WORDS` (`not`, `no`, `never`, etc.) and `CONTRAST_WORDS` (`but`, `however`, etc.) | Prevents sentiment inversion and retains negative polarity markers and contrast shift cues. |
-| **Lemmatization** | Simple noun-only lemmatizer | WordNet lemmatizer with Penn Treebank POS tag mapping | Properly lemmatizes verbs (`running` -> `run`, `was` -> `be`), adjectives (`better` -> `good`), and nouns (`movies` -> `movie`). |
+In accordance with rigorous empirical standards, we document that **context-aware models achieved slightly lower overall test accuracy than baseline models** (E2: 89.29% vs. E4: 88.99%; E1: 86.13% vs. E3: 85.80%).
 
----
-
-### 3. Collaboration Contract & API Reference
-
-All preprocessing routines are exposed via `src/preprocessing.py` and `src/__init__.py`. Downstream team members can import them directly:
-
-```python
-from src.preprocessing import (
-    clean_text,
-    tokenize_text,
-    lemmatize_tokens,
-    preprocess_text,
-    remove_stopwords,
-    expand_contractions,
-    load_dataset,
-    split_data,
-    prepare_and_save_splits,
-    NEGATION_WORDS,
-    CONTRAST_WORDS,
-    REQUIRED_COLUMNS,
-)
-```
-
-#### Shared Functions
-
-- **`clean_text(text: str, lowercase: bool = True, expand_contractions_flag: bool = True, preserve_punctuation: bool = True) -> str`**
-  - **Input**: Raw text string.
-  - **Output**: Cleaned string with HTML stripped, contractions expanded, and punctuation normalized.
-- **`tokenize_text(text: str, preserve_punctuation: bool = True) -> list[str]`**
-  - **Input**: Cleaned or raw text string.
-  - **Output**: List of string tokens. Punctuation marks are kept as standalone tokens by default.
-- **`remove_stopwords(tokens: list[str], preserve_negations: bool = True, preserve_contrast: bool = True, preserve_punctuation: bool = True) -> list[str]`**
-  - **Input**: List of string tokens.
-  - **Output**: List of tokens with standard stopwords removed, but negation words (`not`, `no`, `never`) and contrast conjunctions (`but`, `however`) preserved by default.
-- **`lemmatize_tokens(tokens: list[str], use_pos: bool = True) -> list[str]`**
-  - **Input**: List of string tokens.
-  - **Output**: List of lemmatized tokens with punctuation tokens untouched.
-- **`preprocess_text(text: str, preserve_contrast: bool = True, return_tokens: bool = False) -> str | list[str]`**
-  - **Input**: Raw text string.
-  - **Output**: Fully preprocessed string (default, ideal for TF-IDF / vectorizers) or list of tokens (when `return_tokens=True`). Preserves negations, contrast conjunctions, and sentence/clause punctuation by default.
-- **`load_dataset(filepath: str, required_columns: set[str] = {"review", "sentiment"}) -> pd.DataFrame`**
-  - **Input**: Path to CSV file.
-  - **Output**: Validated DataFrame containing required `review` and `sentiment` columns (raises `ValueError` if missing).
-- **`split_data(df: pd.DataFrame, target_col: str = "sentiment", test_size: float = 0.2, random_state: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]`**
-  - **Input**: DataFrame containing `review` and `sentiment` columns.
-  - **Output**: Tuple of `(train_df, test_df)` with identical stratified class balance.
-- **`prepare_and_save_splits(raw_csv_path: str = "data/raw/IMDB Dataset.csv", output_dir: str = "data/processed", test_size: float = 0.2, random_state: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]`**
-  - **Input**: Path to raw CSV file and output destination.
-  - **Output**: Loads dataset, cleans duplicates, generates stratified split, and saves `train.csv` and `test.csv`.
+### Why Context Features Did Not Outperform Baselines Overall:
+1. **Feature Sparsity & Vocabulary Explosion**:
+   Prefixing tokens with `NOT_`, `BEFORE_BUT_`, and `AFTER_BUT_` expanded the vocabulary from **46,864 features to 102,568 features** (+118%). Linear classifiers like Naive Bayes and Logistic Regression rely on direct word frequency counts. Splitting a common token (e.g. `good` into `good`, `NOT_good`, `BEFORE_BUT_good`, `AFTER_BUT_good`) dilutes term frequency and introduces severe parameter sparsity without dense continuous embeddings.
+2. **Document-Level Polarity vs. Clause-Level Polarity**:
+   IMDb reviews average **231 words** in length. Across multi-paragraph reviews, overall sentiment is largely determined by the cumulative density of sentiment words rather than single isolated negations.
+3. **Local Nuance vs. Global Regularization**:
+   While context features excel at classifying targeted negation phrases (e.g., *"not good"*, *"never liked"*), applying rule-based prefixes across entire documents adds minor noise to bag-of-words weights.
 
 ---
 
-### 4. Shared Dataset Splits
+## 🚀 Interactive Streamlit Web Application
 
-The raw IMDb 50,000 dataset was deduplicated (418 exact duplicate reviews removed) leaving **49,582 unique reviews**.
-A stratified 80:20 train-test split was executed using `random_state=42` and saved to `data/processed/`:
+The Streamlit web application (`app.py`) provides an interactive interface for model exploration:
 
-- **Train Split**: [`data/processed/train.csv`](file:///Users/jaiminkoriya/Documents/movie-review-sentiment-analyzer/data/processed/train.csv)
-  - **Rows**: 39,665
-  - **Positive**: 19,907 (50.19%)
-  - **Negative**: 19,758 (49.81%)
-- **Test Split**: [`data/processed/test.csv`](file:///Users/jaiminkoriya/Documents/movie-review-sentiment-analyzer/data/processed/test.csv)
-  - **Rows**: 9,917
-  - **Positive**: 4,977 (50.19%)
-  - **Negative**: 4,940 (49.81%)
-
-All subsequent modules (feature engineering, vectorization, model training, evaluation) must use these exact splits to prevent data leakage and guarantee comparability.
+### Features
+1. **Interactive Sentiment Analyzer**:
+   - Single-review classification across all 4 experiments.
+   - Quick-load curated test cases (Clearly Positive, Clearly Negative, Negation-Heavy, Contrastive, Very Short).
+   - Real-time word and character counters.
+   - Informational warning for short reviews (< 5 words).
+   - Prominent sentiment outcome cards with estimated posterior confidence.
+   - Explicit probability disclaimers (clarifying that confidence is model probability, not guaranteed accuracy).
+2. **Session Prediction History & CSV Export**:
+   - In-memory tracking of all analyzed reviews during the browser session.
+   - Automatic prevention of duplicate entries caused by Streamlit reruns.
+   - Tabular history review preview.
+   - One-click CSV export via `st.download_button`.
+   - Clear history button.
+3. **Model Comparison Dashboard**:
+   - Dynamic loading of metrics directly from `reports/evaluation_results.csv`.
+   - Standout banner highlighting the best-performing model (E2).
+   - Grouped bar chart comparing Accuracy, Precision, Recall, and F1-Score on a standard 0–100% scale.
+   - 2x2 grid displaying dark-themed confusion matrix heatmaps matching the UI.
+4. **Comprehensive Methodology & Academic About Pages**:
+   - Detailed documentation of dataset preparation, preprocessing, context engineering, and model architectures.
 
 ---
 
-## Setup & Running Unit Tests
+## 🛠️ Setup & Installation
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Run preprocessing unit tests:
-   ```bash
-   python -m pytest tests/test_preprocessing.py -v
-   ```
-
-3. Launch Jupyter to view exploration and preprocessing notebooks:
-   ```bash
-   jupyter notebook notebooks/01_data_exploration.ipynb
-   jupyter notebook notebooks/02_text_preprocessing.ipynb
-   ```
-
-## Running the full pipeline
-
+### 1. Clone the Repository
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q
-PYTHONPATH=. .venv/bin/python src/preprocessing.py
-PYTHONPATH=. .venv/bin/python src/vectorizer.py
-PYTHONPATH=. .venv/bin/python src/train.py
-PYTHONPATH=. .venv/bin/python src/evaluate.py
+git clone https://github.com/jaimin044/movie-review-sentiment-analyzer.git
+cd movie-review-sentiment-analyzer
 ```
 
-The raw dataset is read from `data/raw/IMDB Dataset.csv`. Generated data and
-model artifacts are written to `data/processed/` and `models/`.
+### 2. Create and Activate a Virtual Environment
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 💻 Commands Reference
+
+### Model Training
+Trains, evaluates, and serializes all 4 models (`E1` through `E4`) into `models/`:
+```bash
+python -m src.train
+```
+
+### Model Evaluation & Report Generation
+Generates evaluation tables, classification reports, and dark-themed confusion matrix plots into `reports/`:
+```bash
+python -m src.evaluate
+```
+
+### Launch Streamlit Application
+Starts the local interactive Streamlit server:
+```bash
+streamlit run app.py
+```
+
+### Run Test Suite
+Executes all 120 automated unit and integration tests:
+```bash
+python -m pytest tests/ -v
+```
+
+---
+
+## 🧪 Automated Test Suite Summary
+
+The test suite covers backend modules, context transformers, model persistence, and Streamlit helper functions:
+
+```text
+tests/
+├── test_app.py                 # 19 tests: validation, history, deduplication, CSV, dashboard data
+├── test_context_features.py    #  4 tests: negation scope & contrast marking logic
+├── test_evaluate.py            #  6 tests: metric calculation, plotting, pipeline discovery
+├── test_prediction.py          # 15 tests: input validation, pipeline caching, batch prediction
+├── test_preprocessing.py       # 34 tests: cleaning, contractions, negations, lemmatization, splits
+├── test_train.py               # 15 tests: schema validation, training loops, pipeline construction
+└── test_vectorizer.py          # 18 tests: TF-IDF transformers, n-grams, serialization
+
+Total: 120 passed in ~4.0s (100% pass rate)
+```

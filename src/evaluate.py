@@ -196,14 +196,18 @@ def plot_confusion_matrix(
     model_name: str,
     output_path: str,
 ) -> None:
-    """Plots and saves a confusion matrix heatmap.
+    """Plots and saves a dark-themed confusion matrix heatmap matching the UI.
 
     Args:
         cm: 2x2 confusion matrix array.
         model_name: Model title for figure.
         output_path: File path to save figure.
     """
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(7, 5.5))
+    fig.patch.set_facecolor("#0e1117")
+    ax.set_facecolor("#1c2330")
+
+    # High-contrast heatmap styled for dark theme
     sns.heatmap(
         cm,
         annot=True,
@@ -213,22 +217,28 @@ def plot_confusion_matrix(
         yticklabels=LABEL_ORDER,
         cbar=False,
         ax=ax,
-        annot_kws={"size": 14, "weight": "bold"},
+        annot_kws={"size": 15, "weight": "bold"},
     )
-    ax.set_title(f"Confusion Matrix: {model_name}", fontsize=13, pad=12)
-    ax.set_xlabel("Predicted Sentiment", fontsize=11, labelpad=8)
-    ax.set_ylabel("True Sentiment", fontsize=11, labelpad=8)
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300)
+
+    ax.set_title(f"Confusion Matrix: {model_name}", fontsize=13, pad=16, color="#f8fafc", weight="bold")
+    ax.set_xlabel("Predicted Sentiment", fontsize=11, labelpad=10, color="#cbd5e1", weight="bold")
+    ax.set_ylabel("True Sentiment", fontsize=11, labelpad=10, color="#cbd5e1", weight="bold")
+    ax.tick_params(colors="#cbd5e1", labelsize=10)
+
+    for spine in ax.spines.values():
+        spine.set_color("#334155")
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
     plt.close(fig)
-    print(f"Saved confusion matrix plot to: {output_path}")
+    print(f"Saved dark-themed confusion matrix plot to: {output_path}")
 
 
 def plot_model_comparison(
     metrics_list: List[dict[str, Any]],
     output_path: str,
 ) -> None:
-    """Plots and saves a grouped bar chart comparing models across key metrics.
+    """Plots and saves a dark-themed grouped bar chart comparing models across key metrics.
 
     Args:
         metrics_list: List of metric dictionaries.
@@ -248,7 +258,10 @@ def plot_model_comparison(
 
     df_plot = pd.DataFrame(data_rows)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
+    fig.patch.set_facecolor("#0e1117")
+    ax.set_facecolor("#1c2330")
+
     palette = sns.color_palette("muted", len(metric_labels))
     sns.barplot(
         data=df_plot,
@@ -259,12 +272,21 @@ def plot_model_comparison(
         ax=ax,
     )
 
-    ax.set_title("Model Performance Comparison (Test Dataset)", fontsize=14, pad=14, weight="bold")
-    ax.set_ylabel("Score", fontsize=12)
-    ax.set_xlabel("Model", fontsize=12)
+    ax.set_title("Model Performance Comparison (Test Dataset)", fontsize=14, pad=16, weight="bold", color="#f8fafc")
+    ax.set_ylabel("Score", fontsize=12, color="#cbd5e1", weight="bold")
+    ax.set_xlabel("Model", fontsize=12, color="#cbd5e1", weight="bold")
     ax.set_ylim(0.70, 1.0)
-    ax.grid(axis="y", linestyle="--", alpha=0.5)
-    ax.legend(title="Metric", loc="lower right", frameon=True)
+    ax.tick_params(colors="#cbd5e1", labelsize=10)
+    ax.grid(axis="y", linestyle="--", alpha=0.25, color="#475569")
+
+    for spine in ax.spines.values():
+        spine.set_color("#334155")
+
+    legend = ax.legend(title="Metric", loc="lower right", frameon=True, facecolor="#1e293b", edgecolor="#334155")
+    if legend:
+        legend.get_title().set_color("#cbd5e1")
+        for text in legend.get_texts():
+            text.set_color("#f8fafc")
 
     # Annotate numeric values above bars
     for p in ax.patches:
@@ -275,15 +297,17 @@ def plot_model_comparison(
                 (p.get_x() + p.get_width() / 2.0, height),
                 ha="center",
                 va="bottom",
-                fontsize=9,
+                fontsize=8.5,
+                color="#f8fafc",
+                weight="bold",
                 xytext=(0, 3),
                 textcoords="offset points",
             )
 
-    plt.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
     plt.close(fig)
-    print(f"Saved model comparison plot to: {output_path}")
+    print(f"Saved dark-themed model comparison plot to: {output_path}")
 
 
 def evaluate_all(
